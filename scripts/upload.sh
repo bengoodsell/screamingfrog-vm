@@ -1,0 +1,11 @@
+#!/bin/bash
+# Upload crawls to GCS and delete on success
+CRAWL_DIR="/home/reporting/crawls"
+GCS_BUCKET="gs://bqdl-uploads/screamingfrog"
+
+# Sync each client folder to GCS
+for client_dir in "$CRAWL_DIR"/*/; do
+    client=$(basename "$client_dir")
+    /snap/bin/gcloud storage rsync "$client_dir" "$GCS_BUCKET/$client" --recursive && \
+    rm -rf "$client_dir"/*
+done
