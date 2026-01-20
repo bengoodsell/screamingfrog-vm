@@ -7,17 +7,42 @@ Pipeline scripts for compressing, uploading, and cleaning Screaming Frog crawl e
 ### SSH Access
 ```bash
 # SSH into the VM
-/snap/bin/gcloud compute ssh screaming-frog --zone=us-east4-a
+gcloud compute ssh screaming-frog --zone=us-east4-a
 
 # Run command as reporting user
 sudo -u reporting <command>
 
 # SSH and run single command
-/snap/bin/gcloud compute ssh screaming-frog --zone=us-east4-a --command="<command>"
+gcloud compute ssh screaming-frog --zone=us-east4-a --command="<command>"
 ```
 
 ### Chrome Remote Desktop
 For GUI access to Screaming Frog scheduled tasks, use Chrome Remote Desktop.
+- **Access URL**: https://remotedesktop.google.com/access
+- **Google Account**: `reporting@tightship.consulting`
+- **Linux User**: `reporting`
+
+#### Display Configuration (Avoiding Conflicts)
+Xvfb and Chrome Remote Desktop use separate displays to avoid conflicts:
+
+| Service | Display | Purpose |
+|---------|---------|---------|
+| Xvfb | `:0` | Headless display for Screaming Frog scheduled tasks |
+| Chrome Remote Desktop | `:20+` | Interactive GUI access (CRD manages its own) |
+
+The `reporting` user has `DISPLAY=:0` in `.bashrc` for headless operations.
+
+#### Re-authorizing Chrome Remote Desktop
+If CRD stops working, re-authorize via SSH:
+1. Go to https://remotedesktop.google.com/headless (logged in as `reporting@tightship.consulting`)
+2. Generate the Debian Linux command
+3. SSH to VM and run as reporting user:
+   ```bash
+   sudo -u reporting <paste-command-here>
+   ```
+
+#### Color Management Dialog
+On first connect, a polkit dialog may ask for "ubuntu" password to "create a color managed device". This can be safely cancelled - it doesn't affect functionality.
 
 ### VM Details
 | Property | Value |
@@ -26,8 +51,10 @@ For GUI access to Screaming Frog scheduled tasks, use Chrome Remote Desktop.
 | Zone | `us-east4-a` |
 | Project | `tight-ship-consulting` |
 | SF User | `reporting` |
-| gcloud path | `/snap/bin/gcloud` |
+| gcloud (local Mac) | `/opt/homebrew/share/google-cloud-sdk/bin/gcloud` |
+| gcloud (on VM) | `/snap/bin/gcloud` |
 | Screaming Frog | `/usr/bin/screamingfrogseospider` (v23.2) |
+| Xvfb Display | `:0` (for headless tasks) |
 
 ## Pipeline Scripts
 
@@ -119,12 +146,12 @@ BigQuery: screamingfrog.*_pub tables
 
 ### Check Pipeline Logs
 ```bash
-/snap/bin/gcloud compute ssh screaming-frog --zone=us-east4-a --command="cat /home/reporting/screamingfrog-vm/scripts/logs/pipeline.log"
+gcloud compute ssh screaming-frog --zone=us-east4-a --command="cat /home/reporting/screamingfrog-vm/scripts/logs/pipeline.log"
 ```
 
 ### Verify GCS Uploads
 ```bash
-/snap/bin/gcloud storage ls gs://bqdl-uploads/screamingfrog/
+gcloud storage ls gs://bqdl-uploads/screamingfrog/
 ```
 
 ### Check BigQuery for Recent Data
@@ -140,7 +167,7 @@ If `bqdl` fails with schema errors, check the CSV columns match the BigQuery tab
 
 ### Manual Pipeline Run
 ```bash
-/snap/bin/gcloud compute ssh screaming-frog --zone=us-east4-a --command="sudo -u reporting /home/reporting/screamingfrog-vm/scripts/run.sh"
+gcloud compute ssh screaming-frog --zone=us-east4-a --command="sudo -u reporting /home/reporting/screamingfrog-vm/scripts/run.sh"
 ```
 
 ### Suppress Pipeline Alerts
@@ -166,7 +193,7 @@ git add . && git commit -m "Update scripts" && git push
 
 ### Deploy to VM
 ```bash
-/snap/bin/gcloud compute ssh screaming-frog --zone=us-east4-a --command="cd /home/reporting/screamingfrog-vm && sudo -u reporting git pull"
+gcloud compute ssh screaming-frog --zone=us-east4-a --command="cd /home/reporting/screamingfrog-vm && sudo -u reporting git pull"
 ```
 
 ## Known Issues
@@ -180,6 +207,6 @@ Fix via Chrome Remote Desktop GUI in Screaming Frog scheduled tasks.
 
 ## Future Work
 
-- [ ] Re-implement email alerting on GCP VM
+- [x] Re-implement email alerting on GCP VM
 - [ ] Expected crawl schedule configuration
 - [ ] Webhook support (Slack/Discord)
