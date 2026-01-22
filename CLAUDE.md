@@ -96,11 +96,32 @@ Deletes old crawl directories based on retention policy:
 Main orchestration script that runs all pipeline steps in sequence.
 Logs output to `scripts/logs/pipeline.log`.
 
-### Cron Configuration
-Pipeline runs daily at 7 AM via cron (as `reporting` user):
+### Pipeline Triggers
+
+The pipeline runs via two mechanisms:
+
+#### 1. Event-Driven (Primary)
+When `monitor-crawl-emails` detects a new crawl completion email, it publishes to the `crawl-complete` Pub/Sub topic. This triggers `trigger-vm-pipeline` which SSHs into the VM and runs the pipeline immediately.
+
+```
+monitor-crawl-emails (every 30 min)
+    │
+    ├─→ Detects new crawl completion email
+    │
+    └─→ Publishes to Pub/Sub: crawl-complete
+            │
+            └─→ trigger-vm-pipeline Cloud Function
+                    │
+                    └─→ gcloud compute ssh → run.sh
+```
+
+#### 2. Scheduled Cron (Fallback)
+Daily at 7 AM as a safety net in case event-driven triggers fail:
 ```cron
 0 7 * * * /home/reporting/screamingfrog-vm/scripts/run.sh
 ```
+
+The pipeline is idempotent - `gcloud storage rsync` handles duplicate uploads gracefully.
 
 ## Full Data Pipeline
 
@@ -125,7 +146,8 @@ BigQuery: screamingfrog.*_pub tables
 | Function | Trigger | Purpose |
 |----------|---------|---------|
 | `bqdl` | Eventarc (GCS upload) | Import CSVs to BigQuery |
-| `monitor-crawl-emails` | Cloud Scheduler (30 min) | Track crawl completion |
+| `monitor-crawl-emails` | Cloud Scheduler (30 min) | Track crawl completion, publish to Pub/Sub |
+| `trigger-vm-pipeline` | Pub/Sub (crawl-complete) | SSH to VM and run pipeline |
 | `screamingfrog-raw-to-pub` | Cloud Scheduler (6 hours) | Transform raw → pub |
 | `delete-test-crawl` | HTTP | Remove test crawls |
 
@@ -141,6 +163,7 @@ BigQuery: screamingfrog.*_pub tables
 | `segments_raw` / `segments_pub` | URL segments |
 | `crawl_emails` | Email tracking |
 | `pipeline_alerts` | Alert suppression |
+| `pipeline_triggers` | Event-driven trigger audit log |
 
 ## Troubleshooting
 
@@ -177,11 +200,31 @@ INSERT INTO `tight-ship-consulting.screamingfrog.pipeline_alerts`
 VALUES ('client_name', TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 7 DAY), 'Reason');
 ```
 
+### Check Pipeline Trigger History
+```sql
+SELECT email_id, client, trigger_timestamp, success, error_message
+FROM `tight-ship-consulting.screamingfrog.pipeline_triggers`
+ORDER BY trigger_timestamp DESC
+LIMIT 20;
+```
+
+### Manually Trigger Pipeline via Pub/Sub
+```bash
+gcloud pubsub topics publish crawl-complete \
+    --message='{"email_id":"manual-test","client":"test","crawl_name":"manual trigger"}'
+```
+
+### Check trigger-vm-pipeline Logs
+```bash
+gcloud functions logs read trigger-vm-pipeline --region=us-east4 --gen2
+```
+
 ## Related Resources
 
-- **SfAutoUpload (deprecated)**: `/Users/bengoods/SfAutoUpload/`
+- **SfAutoUpload**: `/Users/bengoods/SfAutoUpload/` (email monitoring & trigger functions)
 - **GCS Bucket**: `gs://bqdl-uploads/screamingfrog`
 - **GCP Project**: `tight-ship-consulting`
+- **Pub/Sub Topic**: `crawl-complete` (pipeline trigger events)
 
 ## Updating Scripts
 
@@ -208,5 +251,6 @@ Fix via Chrome Remote Desktop GUI in Screaming Frog scheduled tasks.
 ## Future Work
 
 - [x] Re-implement email alerting on GCP VM
+- [x] Event-driven pipeline trigger on crawl completion
 - [ ] Expected crawl schedule configuration
 - [ ] Webhook support (Slack/Discord)
