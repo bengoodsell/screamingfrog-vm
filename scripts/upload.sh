@@ -3,6 +3,9 @@
 CRAWL_DIR="/home/reporting/crawls"
 GCS_BUCKET="gs://bqdl-uploads/screamingfrog"
 
+# Change to accessible directory to avoid find restore directory errors
+cd "$CRAWL_DIR" || exit 1
+
 # Sync each client folder to GCS
 for client_dir in "$CRAWL_DIR"/*/; do
     client=$(basename "$client_dir")

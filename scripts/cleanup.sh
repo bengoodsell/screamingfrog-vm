@@ -2,6 +2,9 @@
 # Delete old crawls based on retention policy
 CRAWL_DIR="/home/reporting/crawls"
 
+# Change to accessible directory to avoid find restore directory errors
+cd "$CRAWL_DIR" || exit 1
+
 # Groundworks: 21 days retention
 find "$CRAWL_DIR/groundworks" -mindepth 1 -maxdepth 1 -type d -mtime +21 -exec rm -rf {} \;
 
