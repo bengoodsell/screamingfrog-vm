@@ -7,5 +7,5 @@ GCS_BUCKET="gs://bqdl-uploads/screamingfrog"
 for client_dir in "$CRAWL_DIR"/*/; do
     client=$(basename "$client_dir")
     /snap/bin/gcloud storage rsync "$client_dir" "$GCS_BUCKET/$client" --recursive && \
-    rm -rf "$client_dir"/*
+    find "$client_dir" -type f \( -name "*.csv" -o -name "*.gz" \) -delete
 done
