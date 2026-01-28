@@ -158,12 +158,12 @@ BigQuery: screamingfrog.*_pub tables
 | Table | Description |
 |-------|-------------|
 | `internal_raw` / `internal_pub` | Main crawl data |
-| `issues_raw` / `issues_pub` | SEO issues |
+| `issues_raw` / `issues_pub` | SEO issues (key columns: `file_path`, `upload_date`, `crawl_date`) |
 | `overview_raw` / `overview_pub` | Crawl overview |
 | `segments_raw` / `segments_pub` | URL segments |
-| `crawl_emails` | Email tracking |
+| `crawl_emails` | Email tracking (key columns: `email_id`, `crawl_name`, `received_timestamp`, `client`) |
 | `pipeline_alerts` | Alert suppression |
-| `pipeline_triggers` | Event-driven trigger audit log |
+| `pipeline_triggers` | Event-driven trigger audit log (key columns: `email_id`, `client`, `trigger_timestamp`, `success`, `error_message`) |
 
 ## Troubleshooting
 
@@ -239,14 +239,82 @@ git add . && git commit -m "Update scripts" && git push
 gcloud compute ssh screaming-frog --zone=us-east4-a --command="cd /home/reporting/screamingfrog-vm && sudo -u reporting git pull"
 ```
 
-## Known Issues
+## Debugging Pipeline Issues
 
-### Groundworks Task Configuration Bug
-The Groundworks scheduled task has incorrect output folder configured:
-```json
-"output-folder": "/home/reporting/crawls/indagare"  // Should be groundworks
+When data isn't appearing in dashboards, follow this diagnostic decision tree:
+
+### Decision Tree
 ```
-Fix via Chrome Remote Desktop GUI in Screaming Frog scheduled tasks.
+pipeline_triggers shows success=true?
+├── YES → Check GCS for files
+│         ├── Files exist → Check bqdl logs and BigQuery raw tables
+│         │                 └── Raw has data? → Check if raw→pub has run
+│         └── Files missing → Check VM pipeline.log for upload errors
+│
+└── NO or no record → Trigger chain failed
+          ├── Check monitor-crawl-emails logs (did it detect the email?)
+          └── Check trigger-vm-pipeline logs (SSH failure?)
+```
+
+### Step 1: Check crawl_emails (email detection)
+```sql
+SELECT email_id, crawl_name, received_timestamp, client
+FROM `tight-ship-consulting.screamingfrog.crawl_emails`
+WHERE LOWER(crawl_name) LIKE "%<client>%"
+ORDER BY received_timestamp DESC LIMIT 10;
+```
+
+### Step 2: Check pipeline_triggers (trigger fired?)
+```sql
+SELECT email_id, client, trigger_timestamp, success, error_message
+FROM `tight-ship-consulting.screamingfrog.pipeline_triggers`
+WHERE client = '<client>'
+ORDER BY trigger_timestamp DESC LIMIT 10;
+```
+
+### Step 3: Check Cloud Function Logs
+```bash
+# Email monitoring function
+gcloud functions logs read monitor-crawl-emails --region=us-central1 --gen2 --limit=50
+
+# Pipeline trigger function
+gcloud functions logs read trigger-vm-pipeline --region=us-east4 --gen2 --limit=30
+
+# BigQuery import function
+gcloud functions logs read bqdl --region=us-east4 --gen2 --limit=50
+```
+
+### Step 4: Check GCS for Uploaded Files
+```bash
+gcloud storage ls "gs://bqdl-uploads/screamingfrog/<client>/"
+```
+
+### Step 5: Check VM Pipeline Log
+```bash
+gcloud compute ssh screaming-frog --zone=us-east4-a --command="sudo cat /home/reporting/screamingfrog-vm/scripts/logs/pipeline.log | tail -100"
+```
+
+### Step 6: Check BigQuery Raw vs Pub Tables
+```sql
+-- Raw table (populated shortly after upload)
+SELECT file_path, upload_date, crawl_date, COUNT(*) as row_count
+FROM `tight-ship-consulting.screamingfrog.issues_raw`
+WHERE file_path LIKE '%<client>%'
+GROUP BY 1, 2, 3 ORDER BY upload_date DESC LIMIT 10;
+
+-- Pub table (transforms every 6 hours)
+SELECT file_path, crawl_date, COUNT(*) as row_count
+FROM `tight-ship-consulting.screamingfrog.issues_pub`
+WHERE file_path LIKE '%<client>%'
+GROUP BY 1, 2 ORDER BY crawl_date DESC LIMIT 10;
+```
+
+### Step 7: Manually Trigger Raw→Pub Transform
+If data is in `_raw` but not in `_pub`, manually trigger the transform:
+```bash
+gcloud functions call screamingfrog-raw-to-pub --region=us-central1 --gen2
+```
+Note: The scheduled job runs every 6 hours. Data uploaded between runs won't appear in `_pub` tables until the next run.
 
 ## Future Work
 
