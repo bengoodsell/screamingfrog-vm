@@ -101,7 +101,7 @@ Logs output to `scripts/logs/pipeline.log`.
 The pipeline runs via two mechanisms:
 
 #### 1. Event-Driven (Primary)
-When `monitor-crawl-emails` detects a new crawl completion email, it publishes to the `crawl-complete` Pub/Sub topic. This triggers `trigger-vm-pipeline` which SSHs into the VM and runs the pipeline immediately.
+When `monitor-crawl-emails` detects a new crawl completion email, it publishes to the `crawl-complete` Pub/Sub topic. This triggers `trigger-vm-pipeline` which SSHs into the VM and runs the pipeline. After successful upload, a Cloud Task is queued to trigger `screamingfrog-raw-to-pub` after a 5-minute delay (allowing bqdl to finish importing).
 
 ```
 monitor-crawl-emails (every 30 min)
@@ -112,7 +112,11 @@ monitor-crawl-emails (every 30 min)
             │
             └─→ trigger-vm-pipeline Cloud Function
                     │
-                    └─→ gcloud compute ssh → run.sh
+                    ├─→ SSH to VM → run.sh → GCS upload
+                    │
+                    └─→ Queue Cloud Task (5 min delay)
+                            │
+                            └─→ screamingfrog-raw-to-pub → pub tables
 ```
 
 #### 2. Scheduled Cron (Fallback)
@@ -136,10 +140,12 @@ bqdl Cloud Function (Eventarc trigger)
     ↓
 BigQuery: screamingfrog.*_raw tables
     ↓
-Stored Procedure (every 6 hours)
+screamingfrog-raw-to-pub (Cloud Task, 5 min after upload)
     ↓
 BigQuery: screamingfrog.*_pub tables
 ```
+
+Note: The 6-hour scheduled job remains as a fallback if the Cloud Task fails.
 
 ## Cloud Functions
 
@@ -147,8 +153,8 @@ BigQuery: screamingfrog.*_pub tables
 |----------|---------|---------|
 | `bqdl` | Eventarc (GCS upload) | Import CSVs to BigQuery |
 | `monitor-crawl-emails` | Cloud Scheduler (30 min) | Track crawl completion, publish to Pub/Sub |
-| `trigger-vm-pipeline` | Pub/Sub (crawl-complete) | SSH to VM and run pipeline |
-| `screamingfrog-raw-to-pub` | Cloud Scheduler (6 hours) | Transform raw → pub |
+| `trigger-vm-pipeline` | Pub/Sub (crawl-complete) | SSH to VM, run pipeline, queue raw→pub task |
+| `screamingfrog-raw-to-pub` | Cloud Tasks (5 min delay) + Scheduler (6 hours fallback) | Transform raw → pub |
 | `delete-test-crawl` | HTTP | Remove test crawls |
 
 ## BigQuery Tables
@@ -225,6 +231,7 @@ gcloud functions logs read trigger-vm-pipeline --region=us-east4 --gen2
 - **GCS Bucket**: `gs://bqdl-uploads/screamingfrog`
 - **GCP Project**: `tight-ship-consulting`
 - **Pub/Sub Topic**: `crawl-complete` (pipeline trigger events)
+- **Cloud Tasks Queue**: `screamingfrog-raw-to-pub-queue` (us-central1)
 
 ## Updating Scripts
 
@@ -314,11 +321,27 @@ If data is in `_raw` but not in `_pub`, manually trigger the transform:
 ```bash
 gcloud functions call screamingfrog-raw-to-pub --region=us-central1 --gen2
 ```
-Note: The scheduled job runs every 6 hours. Data uploaded between runs won't appear in `_pub` tables until the next run.
+Note: The raw→pub transform is automatically triggered ~5 minutes after each crawl upload via Cloud Tasks. The 6-hour scheduled job remains as a fallback.
+
+### Step 8: Check Cloud Tasks Queue
+```bash
+gcloud tasks list --queue=screamingfrog-raw-to-pub-queue --location=us-central1
+```
+
+### Pause/Resume Cloud Tasks (Emergency)
+If the raw→pub triggers are causing issues:
+```bash
+# Pause the queue (tasks will accumulate but not execute)
+gcloud tasks queues pause screamingfrog-raw-to-pub-queue --location=us-central1
+
+# Resume the queue
+gcloud tasks queues resume screamingfrog-raw-to-pub-queue --location=us-central1
+```
 
 ## Future Work
 
 - [x] Re-implement email alerting on GCP VM
 - [x] Event-driven pipeline trigger on crawl completion
+- [x] Event-driven raw→pub transform (Cloud Tasks with 5 min delay)
 - [ ] Expected crawl schedule configuration
 - [ ] Webhook support (Slack/Discord)
