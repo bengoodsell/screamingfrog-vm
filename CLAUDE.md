@@ -88,8 +88,8 @@ Uploads each client folder to GCS and deletes local files on success.
 - Uses `gcloud storage rsync` for efficient uploads
 
 #### cleanup.sh
-Deletes old crawl directories based on retention policy:
-- **Groundworks**: 21 days
+Deletes old Screaming Frog crawl data in ProjectInstanceData based on per-client retention (reads URL from DbSeoSpiderFileKey):
+- **Groundworks**: 18 days
 - **All other clients**: 14 days
 
 #### run.sh
@@ -197,6 +197,25 @@ If `bqdl` fails with schema errors, check the CSV columns match the BigQuery tab
 ### Manual Pipeline Run
 ```bash
 gcloud compute ssh screaming-frog --zone=us-east4-a --command="sudo -u reporting /home/reporting/screamingfrog-vm/scripts/run.sh"
+```
+
+**Important:** Manual pipeline runs bypass the event-driven trigger chain, so no Cloud Task is queued for the raw→pub transform. After a manual run, you must also trigger the transform manually:
+```bash
+gcloud functions call screamingfrog-raw-to-pub --region=us-central1 --gen2
+```
+Then verify the pub tables have the expected data:
+```sql
+-- Check internal_pub
+SELECT file_path, crawl_timestamp, org, COUNT(*) as row_count
+FROM `tight-ship-consulting.screamingfrog.internal_pub`
+WHERE file_path LIKE '%<client>%'
+GROUP BY 1, 2, 3 ORDER BY crawl_timestamp DESC LIMIT 10;
+
+-- Check issues_pub
+SELECT file_path, crawl_date, COUNT(*) as row_count
+FROM `tight-ship-consulting.screamingfrog.issues_pub`
+WHERE file_path LIKE '%<client>%'
+GROUP BY 1, 2 ORDER BY crawl_date DESC LIMIT 10;
 ```
 
 ### Suppress Pipeline Alerts
