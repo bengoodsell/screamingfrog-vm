@@ -1,29 +1,44 @@
 #!/bin/bash
-# Clean up old Screaming Frog internal data with per-client retention
+# Clean up old Screaming Frog crawl data in ProjectInstanceData.
+#
+# Retention is frequency-aware. All crawl data is durably backed up to
+# gs://bqdl-uploads/screamingfrog/ and ingested into the screamingfrog.*_pub
+# BigQuery tables, so ProjectInstanceData is only a local cache for re-opening
+# crawls in the SF GUI. Daily crawls regenerate fast and are kept briefly;
+# weekly crawls are kept 2-3 cycles so SF's GUI crawl-comparison still works.
 PROJECT_DATA="/home/reporting/.ScreamingFrogSEOSpider/ProjectInstanceData"
 
-# Retention periods (days)
-GROUNDWORKS_DAYS=18
-DEFAULT_DAYS=14
+# Retention in days, matched by case-insensitive substring of the crawl URL.
+# First match wins; anything unmatched gets DEFAULT_DAYS.
+# Format: "url-substring:days"
+RETENTION_RULES=(
+    "bigbrandtire.com:7"   # BBT      - daily
+    "jeswork.com:7"        # JESwork  - daily (Groundworks brand)
+    "groundworks.com:18"   # GW       - weekly multi-brand, kept longer
+)
+DEFAULT_DAYS=14            # all other (weekly/monthly) crawls
 
-if [ -d "$PROJECT_DATA" ]; then
-    cd "$PROJECT_DATA" || exit 1
+[ -d "$PROJECT_DATA" ] || exit 0
+cd "$PROJECT_DATA" || exit 1
 
-    for dir in "$PROJECT_DATA"/*/; do
-        [ -d "$dir" ] || continue
+for dir in "$PROJECT_DATA"/*/; do
+    [ -d "$dir" ] || continue
 
-        key_file="$dir/DbSeoSpiderFileKey"
-        [ -f "$key_file" ] || continue
+    key_file="${dir}DbSeoSpiderFileKey"
+    [ -f "$key_file" ] || continue
 
-        # Determine retention based on crawl URL
-        url=$(grep '^url=' "$key_file" | head -1 | cut -d= -f2-)
-        if echo "$url" | grep -qi 'groundworks'; then
-            retention=$GROUNDWORKS_DAYS
-        else
-            retention=$DEFAULT_DAYS
+    url=$(grep -m1 '^url=' "$key_file" | cut -d= -f2-)
+
+    retention=$DEFAULT_DAYS
+    for rule in "${RETENTION_RULES[@]}"; do
+        pattern="${rule%%:*}"
+        days="${rule##*:}"
+        if echo "$url" | grep -qiF "$pattern"; then
+            retention=$days
+            break
         fi
-
-        # Delete if directory is older than retention period
-        find "$dir" -maxdepth 0 -type d -mtime +$retention -exec rm -rf {} \;
     done
-fi
+
+    # Delete the crawl dir if older than its retention period
+    find "$dir" -maxdepth 0 -type d -mtime +"$retention" -exec rm -rf {} \;
+done
