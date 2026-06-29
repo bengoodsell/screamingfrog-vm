@@ -13,9 +13,11 @@ PROJECT_DATA="/home/reporting/.ScreamingFrogSEOSpider/ProjectInstanceData"
 # Format: "url-substring:days"
 RETENTION_RULES=(
     "bigbrandtire.com:7"   # BBT      - daily
-    "jeswork.com:7"        # JESwork  - daily (Groundworks brand)
     "groundworks.com:18"   # GW       - weekly multi-brand, kept longer
 )
+# JESwork's standalone daily task was retired 2026-06-29 (CF block resolved
+# 6/22, GW comprehensive now covers jeswork.com). Rule removed; jeswork.com is
+# now crawled only as part of groundworks.com, which already gets 18 days.
 DEFAULT_DAYS=14            # all other (weekly/monthly) crawls
 
 [ -d "$PROJECT_DATA" ] || exit 0

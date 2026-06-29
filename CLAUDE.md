@@ -50,10 +50,13 @@ On first connect, a polkit dialog may ask for "ubuntu" password to "create a col
 | VM Name | `screaming-frog` |
 | Zone | `us-east4-a` |
 | Project | `tight-ship-consulting` |
+| Machine type | `n2-highmem-8` (8 vCPU, 64 GB RAM) — bumped from `n2-highmem-4` 2026-05-22 after recurring kernel OOM kills (multiple SF JVMs at `-Xmx29g` + Chrome `headless_shell` workers overlapped on 32 GB and took down dbus). Machine-type changes require the VM to be stopped: `gcloud compute instances stop` → `set-machine-type` → `start`. |
+| Boot disk | 500 GB pd-ssd (resized from 200 GB 2026-05; online resize via `gcloud compute disks resize` + `growpart`/`resize2fs`) |
+| External IP | `34.48.111.90` (reserved as `screaming-frog-ip` in us-east4) — survives stop/start/machine-type changes. Free while attached to a running VM. |
 | SF User | `reporting` |
 | gcloud (local Mac) | `/opt/homebrew/share/google-cloud-sdk/bin/gcloud` |
 | gcloud (on VM) | `/snap/bin/gcloud` |
-| Screaming Frog | `/usr/bin/screamingfrogseospider` (v23.2) |
+| Screaming Frog | `/usr/bin/screamingfrogseospider` (v24.0) |
 | Xvfb Display | `:0` (for headless tasks) |
 
 ## Pipeline Scripts
@@ -88,9 +91,14 @@ Uploads each client folder to GCS and deletes local files on success.
 - Uses `gcloud storage rsync` for efficient uploads
 
 #### cleanup.sh
-Deletes old Screaming Frog crawl data in ProjectInstanceData based on per-client retention (reads URL from DbSeoSpiderFileKey):
-- **Groundworks**: 18 days
-- **All other clients**: 14 days
+Deletes old Screaming Frog crawl data in ProjectInstanceData based on **frequency-aware** retention (reads URL from DbSeoSpiderFileKey, matched against a `RETENTION_RULES` map). All crawl data is backed up to GCS + BigQuery, so ProjectInstanceData is only a local cache:
+- **Daily crawls** (BBT `bigbrandtire.com`): 7 days
+- **Groundworks** (`groundworks.com`): 18 days — also covers `jeswork.com` (a GW brand crawled as part of the GW comprehensive crawl)
+- **All other (weekly/monthly)**: 14 days (`DEFAULT_DAYS`)
+
+To change a client's retention or add a daily crawl, edit the `RETENTION_RULES` array in `scripts/cleanup.sh` (`"url-substring:days"`, first match wins).
+
+**Storage note:** the `gs://bqdl-uploads` bucket has **Autoclass** enabled (terminal class ARCHIVE), so cold backups auto-tier down in cost — no lifecycle delete rule is set (intentional; ~1 TB archive costs ~$1–2/mo). `SET_STORAGE_CLASS` lifecycle rules are incompatible with Autoclass.
 
 #### run.sh
 Main orchestration script that runs all pipeline steps in sequence.
