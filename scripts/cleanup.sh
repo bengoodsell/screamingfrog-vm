@@ -20,6 +20,24 @@ RETENTION_RULES=(
 # now crawled only as part of groundworks.com, which already gets 18 days.
 DEFAULT_DAYS=14            # all other (weekly/monthly) crawls
 
+# --- Guard: never delete a crawl that is currently running -------------------
+# SF updates files INSIDE a project dir but does not add/remove entries at the
+# top level, so the directory's own mtime stays frozen at creation time. A crawl
+# running for longer than its retention window therefore looks "old" to
+# find -mtime and would be rm -rf'd mid-flight. Age is not a safe proxy for
+# "finished" - guard on actual use instead.
+# (Found 2026-08-31: a 10-day-old Audible crawl was 3 days from being deleted
+# while still running.)
+is_in_use() {
+    local uuid="$1" pid
+    for pid in $(pgrep -f 'ScreamingFrogSEOSpider.jar' 2>/dev/null); do
+        if ls -l "/proc/$pid/fd" 2>/dev/null | grep -q "$uuid"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 [ -d "$PROJECT_DATA" ] || exit 0
 cd "$PROJECT_DATA" || exit 1
 
@@ -30,6 +48,13 @@ for dir in "$PROJECT_DATA"/*/; do
     [ -f "$key_file" ] || continue
 
     url=$(grep -m1 '^url=' "$key_file" | cut -d= -f2-)
+
+    # Skip crawls that are still running - see is_in_use() above.
+    uuid=$(basename "$dir")
+    if is_in_use "$uuid"; then
+        echo "cleanup: SKIP (crawl in progress) $uuid  $url"
+        continue
+    fi
 
     retention=$DEFAULT_DAYS
     for rule in "${RETENTION_RULES[@]}"; do
